@@ -1,0 +1,11 @@
+{
+  "name": "openclaw",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node server.js",
+    "build": "echo 'No build step for simple server'",
+    "start": "node server.js"
+  },
+  "dependencies": {}
+}

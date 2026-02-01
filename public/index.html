@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenClaw — Clawdbot Observability</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <header class="header">
+      <div class="header-content">
+        <div class="brand">
+          <div class="logo">🍊</div>
+          <div>
+            <h1>OpenClaw</h1>
+            <p>Clawdbot Observability</p>
+          </div>
+        </div>
+        <div class="status">
+          <span class="live-indicator">●</span>
+          <span class="live-text">Live</span>
+          <span id="event-count" class="event-count">0 events today</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="main">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-icon tool">⚡</div>
+          <div class="stat-value" id="stat-tools">0</div>
+          <div class="stat-label">Tool Calls</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon exec">⌘</div>
+          <div class="stat-value" id="stat-exec">0</div>
+          <div class="stat-label">Commands</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon browser">🌐</div>
+          <div class="stat-value" id="stat-browser">0</div>
+          <div class="stat-label">Browser Sessions</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon message">💬</div>
+          <div class="stat-value" id="stat-messages">0</div>
+          <div class="stat-label">Messages</div>
+        </div>
+      </div>
+
+      <div class="dashboard-grid">
+        <aside class="sessions-panel">
+          <h2>Sessions</h2>
+          <div id="sessions-list" class="sessions-list">
+            <div class="empty">No active sessions</div>
+          </div>
+        </aside>
+
+        <section class="events-panel">
+          <div class="events-header">
+            <h2 id="events-title">Live Activity</h2>
+            <button id="clear-filter" class="clear-filter hidden">Clear filter ✕</button>
+          </div>
+          <div id="events-list" class="events-list">
+            <div class="empty">No events yet. Start using Clawdbot to see activity here.</div>
+          </div>
+        </section>
+      </div>
+
+      <section class="files-panel" id="files-panel" style="display: none;">
+        <h2>Top Files Accessed Today</h2>
+        <div id="files-list" class="files-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
