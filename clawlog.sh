@@ -39,9 +39,42 @@ clawmsg() {
 }
 clawthink() { clawlog reasoning "$1"; }
 
+# Goal management
+clawgoal() {
+  local cmd="$1"
+  shift
+  case "$cmd" in
+    set)
+      local goalId="${1:-goal-$(date +%s)}"
+      local description="$2"
+      clawlog session_goal_set "$description" goalId="$goalId" description="$description" "${@:3}"
+      echo "$goalId"
+      ;;
+    done)
+      local goalId="$1"
+      local outcome="${2:-Completed}"
+      clawlog session_goal_completed "Goal completed" goalId="$goalId" outcome="$outcome"
+      ;;
+    drop)
+      local goalId="$1"
+      local reason="${2:-Abandoned}"
+      clawlog session_goal_abandoned "Goal abandoned" goalId="$goalId" outcome="$reason"
+      ;;
+    *)
+      echo "Usage: clawgoal <set|done|drop> [args...]"
+      echo "  clawgoal set 'Build feature X'           # Returns goal ID"
+      echo "  clawgoal done goal-123 'Shipped to prod'"
+      echo "  clawgoal drop goal-123 'Not needed'"
+      return 1
+      ;;
+  esac
+}
+
 echo "🍊 OpenClaw logging loaded"
 echo "   Session: $CLAW_SESSION"
 echo "   Label: $CLAW_LABEL"
 echo "   Channel: $CLAW_CHANNEL"
 echo ""
-echo "Commands: clawlog, clawtool, clawfile, clawexec, clawbrowser, clawmsg, clawthink"
+echo "Commands:"
+echo "  Logging:    clawlog, clawtool, clawfile, clawexec, clawbrowser, clawmsg, clawthink"
+echo "  Goals:      clawgoal set|done|drop"

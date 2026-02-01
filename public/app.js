@@ -11,6 +11,15 @@ const icons = {
   reasoning: '💭',
   session_start: '▶',
   session_end: '■',
+  session_goal_set: '🎯',
+  session_goal_completed: '✅',
+  session_goal_abandoned: '❌',
+};
+
+const goalStatusIcons = {
+  active: '🎯',
+  completed: '✅',
+  abandoned: '❌',
 };
 
 const toolColors = {
@@ -56,6 +65,15 @@ async function fetchStats() {
   const res = await fetch('/api/stats');
   const data = await res.json();
   return data.stats;
+}
+
+async function fetchGoals() {
+  const url = selectedSession
+    ? `/api/goals?session=${selectedSession}`
+    : '/api/goals';
+  const res = await fetch(url);
+  const data = await res.json();
+  return data.goals || [];
 }
 
 function renderEvents(events) {
@@ -106,6 +124,14 @@ function renderSessions(sessions) {
         <span>•</span>
         <span>${formatTimeAgo(session.lastActivity)}</span>
       </div>
+      ${session.goalSummary ? `
+        <div class="session-goals-summary">
+          <span class="goal-badge completed">✓ ${session.goalSummary.completed}</span>
+          ${session.goalSummary.abandoned > 0 ? `<span class="goal-badge abandoned">✕ ${session.goalSummary.abandoned}</span>` : ''}
+          ${session.goalSummary.active > 0 ? `<span class="goal-badge active">● ${session.goalSummary.active}</span>` : ''}
+          <span>(${session.goalSummary.completionRate}%)</span>
+        </div>
+      ` : ''}
     </button>
   `).join('');
   
@@ -118,6 +144,31 @@ function renderSessions(sessions) {
       refresh();
     });
   });
+}
+
+function renderGoals(goals) {
+  const container = document.getElementById('goals-list');
+  const panel = document.getElementById('goals-panel');
+  
+  if (goals.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+  
+  panel.style.display = 'block';
+  container.innerHTML = goals.map(goal => `
+    <div class="goal-item">
+      <div class="goal-status ${goal.status}">${goalStatusIcons[goal.status]}</div>
+      <div class="goal-content">
+        <div class="goal-description">${escapeHtml(goal.description)}</div>
+        ${goal.outcome ? `<div class="goal-outcome">Outcome: ${escapeHtml(goal.outcome)}</div>` : ''}
+        <div class="goal-meta">
+          <span>🕐 ${formatTimeAgo(goal.createdAt)}</span>
+          ${goal.completedAt ? `<span>• Completed ${formatTimeAgo(goal.completedAt)}</span>` : ''}
+        </div>
+      </div>
+    </div>
+  `).join('');
 }
 
 function renderStats(stats) {
@@ -157,15 +208,17 @@ function escapeHtml(text) {
 
 async function refresh() {
   try {
-    const [events, sessions, stats] = await Promise.all([
+    const [events, sessions, stats, goals] = await Promise.all([
       fetchEvents(),
       fetchSessions(),
       fetchStats(),
+      fetchGoals(),
     ]);
     
     renderEvents(events);
     renderSessions(sessions);
     renderStats(stats);
+    renderGoals(goals);
   } catch (err) {
     console.error('Refresh failed:', err);
   }

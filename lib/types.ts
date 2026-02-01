@@ -3,6 +3,9 @@ export type EventType =
   | "tool_result"
   | "session_start"
   | "session_end"
+  | "session_goal_set"
+  | "session_goal_completed"
+  | "session_goal_abandoned"
   | "file_access"
   | "exec_command"
   | "browser_action"
@@ -60,6 +63,16 @@ export interface ClawEvent {
   agentId?: string;
 }
 
+export interface SessionGoal {
+  id: string;
+  sessionId: string;
+  description: string;
+  status: "active" | "completed" | "abandoned";
+  createdAt: string;
+  completedAt?: string;
+  outcome?: string;
+}
+
 export interface Session {
   id: string;
   label?: string;
@@ -69,6 +82,13 @@ export interface Session {
   lastActivity: string;
   eventCount: number;
   isActive: boolean;
+  goals?: SessionGoal[];
+  goalSummary?: {
+    total: number;
+    completed: number;
+    abandoned: number;
+    completionRate: number;
+  };
 }
 
 export interface DailyStats {

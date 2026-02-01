@@ -68,6 +68,8 @@ if (!type || !action) {
   console.log('  node log.js tool_call "read()" tool=read path=SOUL.md');
   console.log('  node log.js file_access "read: file.txt" path=file.txt');
   console.log('  node log.js exec_command "git status" command="git status"');
+  console.log('  node log.js session_goal_set "Build OpenClaw MVP" goalId=goal-1 description="Build MVP"');
+  console.log('  node log.js session_goal_completed "MVP built" goalId=goal-1 outcome="All features working"');
   console.log('');
   console.log('Set env vars:');
   console.log('  CLAW_SESSION=session-id CLAW_LABEL="My Session" CLAW_CHANNEL=discord');

@@ -25,13 +25,73 @@ async function readLogs() {
   }
 }
 
+async function getGoals() {
+  const events = await readLogs();
+  const goalEvents = events.filter(e => 
+    e.type === 'session_goal_set' || 
+    e.type === 'session_goal_completed' || 
+    e.type === 'session_goal_abandoned'
+  );
+  
+  const goals = new Map();
+  
+  for (const event of goalEvents) {
+    const goalId = event.goalId || event.id;
+    const existing = goals.get(goalId);
+    
+    if (event.type === 'session_goal_set') {
+      goals.set(goalId, {
+        id: goalId,
+        sessionId: event.sessionId,
+        description: event.description || event.action,
+        status: 'active',
+        createdAt: event.timestamp,
+      });
+    } else if (existing) {
+      existing.status = event.type === 'session_goal_completed' ? 'completed' : 'abandoned';
+      existing.completedAt = event.timestamp;
+      if (event.outcome) existing.outcome = event.outcome;
+    }
+  }
+  
+  return Array.from(goals.values());
+}
+
 async function getSessions() {
   const events = await readLogs();
   const sessionMap = new Map();
+  const sessionGoals = new Map();
+
+  // First pass: collect goals per session
+  for (const event of events) {
+    if (event.type === 'session_goal_set') {
+      const goals = sessionGoals.get(event.sessionId) || [];
+      goals.push({
+        id: event.goalId || event.id,
+        description: event.description || event.action,
+        status: 'active',
+        createdAt: event.timestamp,
+      });
+      sessionGoals.set(event.sessionId, goals);
+    } else if (event.type === 'session_goal_completed' || event.type === 'session_goal_abandoned') {
+      const goals = sessionGoals.get(event.sessionId) || [];
+      const goalId = event.goalId;
+      const goal = goals.find(g => g.id === goalId);
+      if (goal) {
+        goal.status = event.type === 'session_goal_completed' ? 'completed' : 'abandoned';
+        goal.completedAt = event.timestamp;
+        if (event.outcome) goal.outcome = event.outcome;
+      }
+    }
+  }
 
   for (const event of events) {
     const existing = sessionMap.get(event.sessionId);
     if (!existing) {
+      const goals = sessionGoals.get(event.sessionId) || [];
+      const completed = goals.filter(g => g.status === 'completed').length;
+      const abandoned = goals.filter(g => g.status === 'abandoned').length;
+      
       sessionMap.set(event.sessionId, {
         id: event.sessionId,
         label: event.sessionLabel,
@@ -41,6 +101,13 @@ async function getSessions() {
         lastActivity: event.timestamp,
         eventCount: 1,
         isActive: true,
+        goals,
+        goalSummary: goals.length > 0 ? {
+          total: goals.length,
+          completed,
+          abandoned,
+          completionRate: Math.round((completed / goals.length) * 100),
+        } : undefined,
       });
     } else {
       existing.lastActivity = event.timestamp;
@@ -143,6 +210,17 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('Content-Type', 'application/json');
     res.writeHead(200);
     res.end(JSON.stringify({ stats }));
+    return;
+  }
+
+  if (url.pathname === '/api/goals') {
+    const sessionId = url.searchParams.get('session');
+    let goals = await getGoals();
+    if (sessionId) goals = goals.filter(g => g.sessionId === sessionId);
+    
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(200);
+    res.end(JSON.stringify({ goals }));
     return;
   }
 
