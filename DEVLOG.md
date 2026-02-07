@@ -27,23 +27,27 @@ Tracking incremental improvements to the observability dashboard.
 ### 1.3 Improve Session Reading ✅
 - [x] Read from `~/.openclaw/agents/*/sessions/`
 - [x] Parse session metadata correctly
-- [ ] Show channel info (Discord, webchat, etc.) ⏳
+- [x] Show channel info (Discord, webchat, etc.)
 
 ---
 
 ## Phase 2: UI Improvements
 
-### 2.1 Agent Sidebar
+### 2.1 Channel Display ✅
+- [x] Parse channel from session metadata (Discord, webchat, etc.)
+- [x] Display channel badges in events and sessions
+- [x] Channel icons and colors per platform
+
+### 2.2 Better Event Display ✅
+- [x] Event color-coding by type (left border)
+- [x] Tool call expand/collapse with full args
+- [x] Channel badges in event header
+
+### 2.3 Agent Status Indicators ⏳
 - [ ] Show all agents with status
-- [ ] Click to filter by agent
-- [ ] Show session count per agent
+- [ ] Active/idle indicators per agent
 
-### 2.2 Better Event Display
-- [ ] Color-code by agent
-- [ ] Show tool call details
-- [ ] Expand/collapse for full content
-
-### 2.3 Cost Tracking
+### 2.4 Cost Tracking ⏳
 - [ ] Parse usage from transcripts
 - [ ] Show cost per session
 - [ ] Daily cost summary
@@ -64,7 +68,9 @@ Tracking incremental improvements to the observability dashboard.
 
 ## Changelog
 
-### 2026-02-07 — Phase 1 Complete 🎉
+### 2026-02-07 — Phase 1 & Phase 2 Partial 🎉
+
+**Phase 1 Complete: Multi-Agent Observability**
 
 **Backend (server.js):**
 - Fixed paths: `~/.clawdbot/` → `~/.openclaw/`
@@ -72,7 +78,7 @@ Tracking incremental improvements to the observability dashboard.
 - Added `/api/agents` endpoint returning agent list with session counts
 - Updated session/event reading to support all agents
 - Added agent filtering to `/api/events?agent=xxx`
-- Agent emojis: 🧠 main, 🎭 venice, 💻 kimi
+- Extract and include channel info in sessions and events
 
 **Frontend (public/):**
 - Added Agents panel in sidebar
@@ -80,10 +86,20 @@ Tracking incremental improvements to the observability dashboard.
 - "All Agents" option shows combined view
 - Agent emoji badges in session list (when viewing all)
 - Agent badges in event metadata
-- Styled agent selector with active state
+
+**Phase 2 Partial: UI Enhancements**
+
+**Backend (server.js):**
+- Channel info parsing from session metadata
+
+**Frontend (public/):**
+- Channel badges with icons (Discord 💬, webchat 🌐, etc.)
+- Channel-specific colors
+- Event color-coding by type (left border indicator)
+- Tool call expand/collapse with full args display
+- Improved event layout with channel badges
 
 **Files changed:**
-- `server.js` — Multi-agent backend
-- `public/index.html` — Added agents panel
-- `public/style.css` — Agents panel styles
-- `public/app.js` — Agent fetching, filtering, rendering
+- `server.js` — Channel extraction, multi-agent backend
+- `public/app.js` — Channel badges, event color-coding, tool call details
+- `public/style.css` — Agent panel, channel badges, expand/collapse styles

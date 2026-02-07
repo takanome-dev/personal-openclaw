@@ -106,13 +106,19 @@ function transformEvent(event, sessionId, agentId = 'main') {
     raw: event,
   };
 
+  // Extract channel from event
+  const channel = event.channel || 
+                  event.data?.channel || 
+                  event.data?.deliveryContext?.channel || 
+                  'clawdbot';
+
   switch (event.type) {
     case 'session':
       return {
         ...base,
         type: 'session_start',
         action: `Session started: ${event.cwd || 'unknown'}`,
-        channel: 'clawdbot',
+        channel,
       };
 
     case 'message': {
@@ -137,7 +143,7 @@ function transformEvent(event, sessionId, agentId = 'main') {
         ...base,
         type: role === 'user' ? 'message_received' : 'message_sent',
         action: text || `[${role} message]`,
-        channel: 'clawdbot',
+        channel,
         role,
       };
     }
@@ -162,7 +168,7 @@ function transformEvent(event, sessionId, agentId = 'main') {
         action,
         tool: toolName,
         args,
-        channel: 'clawdbot',
+        channel,
       };
     }
 
@@ -174,7 +180,7 @@ function transformEvent(event, sessionId, agentId = 'main') {
         tool: event.tool,
         resultStatus: event.error ? 'error' : 'success',
         resultSummary: event.error ? String(event.error).substring(0, 100) : 'Completed',
-        channel: 'clawdbot',
+        channel,
       };
     }
 
@@ -185,7 +191,7 @@ function transformEvent(event, sessionId, agentId = 'main') {
         action: event.command?.substring(0, 100) || 'exec',
         command: event.command,
         resultStatus: event.error ? 'error' : 'success',
-        channel: 'clawdbot',
+        channel,
       };
 
     case 'model_change':
@@ -193,7 +199,7 @@ function transformEvent(event, sessionId, agentId = 'main') {
         ...base,
         type: 'reasoning',
         action: `Switched to ${event.provider}/${event.modelId}`,
-        channel: 'clawdbot',
+        channel,
       };
 
     case 'thinking_level_change':
@@ -201,7 +207,7 @@ function transformEvent(event, sessionId, agentId = 'main') {
         ...base,
         type: 'reasoning',
         action: `Thinking level: ${event.thinkingLevel}`,
-        channel: 'clawdbot',
+        channel,
       };
 
     case 'custom':
@@ -262,11 +268,16 @@ async function getSessions() {
     const completed = goals.filter(g => g.status === 'completed').length;
     const abandoned = goals.filter(g => g.status === 'abandoned').length;
 
+    // Extract channel from session metadata
+    const channel = sessionEvent?.data?.channel || 
+                   sessionEvent?.data?.deliveryContext?.channel || 
+                   'clawdbot';
+
     return {
       id: s.id,
       label: sessionEvent?.cwd?.split('/').pop() || s.id.slice(0, 8),
       agentId: s.agentId || 'main',
-      channel: 'clawdbot',
+      channel,
       startedAt: sessionEvent?.timestamp,
       lastActivity,
       eventCount: events.length,
