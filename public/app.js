@@ -36,6 +36,7 @@ const toolColors = {
 };
 
 let selectedSession = null;
+let selectedAgent = null; // null = all agents
 let pollInterval;
 
 function formatTimeAgo(timestamp) {
@@ -46,10 +47,19 @@ function formatTimeAgo(timestamp) {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 
+async function fetchAgents() {
+  const res = await fetch('/api/agents');
+  const data = await res.json();
+  return data.agents || [];
+}
+
 async function fetchEvents() {
-  const url = selectedSession 
-    ? `/api/events?limit=50&session=${selectedSession}`
-    : '/api/events?limit=50';
+  let url = '/api/events?limit=50';
+  if (selectedSession) {
+    url += `&session=${selectedSession}`;
+  } else if (selectedAgent) {
+    url += `&agent=${selectedAgent}`;
+  }
   const res = await fetch(url);
   const data = await res.json();
   return data.events || [];
@@ -58,7 +68,12 @@ async function fetchEvents() {
 async function fetchSessions() {
   const res = await fetch('/api/sessions');
   const data = await res.json();
-  return data.sessions || [];
+  let sessions = data.sessions || [];
+  // Filter by selected agent if set
+  if (selectedAgent) {
+    sessions = sessions.filter(s => s.agentId === selectedAgent);
+  }
+  return sessions;
 }
 
 async function fetchStats() {
@@ -97,12 +112,56 @@ function renderEvents(events) {
         ${event.filePath ? `<div class="event-file">${escapeHtml(event.filePath)}</div>` : ''}
         <div class="event-meta">
           <span>🕐 ${formatTimeAgo(event.timestamp)}</span>
+          ${event.agentId ? `<span class="event-agent">${{'main':'🧠','venice':'🎭','kimi':'💻'}[event.agentId] || '🤖'} ${event.agentId}</span>` : ''}
           ${event.sessionLabel ? `<span>📱 ${escapeHtml(event.sessionLabel)}</span>` : ''}
           ${event.channel ? `<span>#${escapeHtml(event.channel)}</span>` : ''}
         </div>
       </div>
     </div>
   `).join('');
+}
+
+function renderAgents(agents) {
+  const container = document.getElementById('agents-list');
+  
+  if (!agents || agents.length === 0) {
+    container.innerHTML = '<div class="empty">No agents found</div>';
+    return;
+  }
+  
+  const totalSessions = agents.reduce((sum, a) => sum + a.sessionCount, 0);
+  
+  container.innerHTML = `
+    <button class="agent-item all ${selectedAgent === null ? 'active' : ''}" data-id="">
+      <div class="agent-emoji">✦</div>
+      <div class="agent-info">
+        <div class="agent-name">All Agents</div>
+        <div class="agent-sessions">${totalSessions} sessions</div>
+      </div>
+    </button>
+    ${agents.map(agent => `
+      <button class="agent-item ${agent.id === selectedAgent ? 'active' : ''}" data-id="${agent.id}">
+        <div class="agent-emoji">${agent.emoji}</div>
+        <div class="agent-info">
+          <div class="agent-name">${escapeHtml(agent.id)}</div>
+          <div class="agent-sessions">${agent.sessionCount} sessions</div>
+        </div>
+      </button>
+    `).join('')}
+  `;
+  
+  // Add click handlers
+  container.querySelectorAll('.agent-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      selectedAgent = btn.dataset.id || null;
+      selectedSession = null; // Clear session filter when switching agents
+      document.getElementById('sessions-title').textContent = 
+        selectedAgent ? `${selectedAgent} Sessions` : 'Sessions';
+      document.getElementById('events-title').textContent = 'Live Activity';
+      document.getElementById('clear-filter').classList.add('hidden');
+      refresh();
+    });
+  });
 }
 
 function renderSessions(sessions) {
@@ -113,10 +172,15 @@ function renderSessions(sessions) {
     return;
   }
   
+  const agentEmojis = { main: '🧠', venice: '🎭', kimi: '💻' };
+  
   container.innerHTML = sessions.map(session => `
     <button class="session-item ${session.id === selectedSession ? 'active' : ''}" data-id="${session.id}">
       <div class="session-header">
-        <span class="session-name">${escapeHtml(session.label || session.id.slice(0, 8))}</span>
+        <span class="session-name">
+          ${!selectedAgent ? `<span class="session-agent">${agentEmojis[session.agentId] || '🤖'}</span>` : ''}
+          ${escapeHtml(session.label || session.id.slice(0, 8))}
+        </span>
         <span class="session-status ${session.isActive ? 'active' : 'idle'}">${session.isActive ? 'Active' : 'Idle'}</span>
       </div>
       <div class="session-meta">
@@ -208,13 +272,15 @@ function escapeHtml(text) {
 
 async function refresh() {
   try {
-    const [events, sessions, stats, goals] = await Promise.all([
+    const [agents, events, sessions, stats, goals] = await Promise.all([
+      fetchAgents(),
       fetchEvents(),
       fetchSessions(),
       fetchStats(),
       fetchGoals(),
     ]);
     
+    renderAgents(agents);
     renderEvents(events);
     renderSessions(sessions);
     renderStats(stats);
