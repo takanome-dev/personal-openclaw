@@ -43,14 +43,17 @@ Tracking incremental improvements to the observability dashboard.
 - [x] Tool call expand/collapse with full args
 - [x] Channel badges in event header
 
-### 2.3 Agent Status Indicators ⏳
-- [ ] Show all agents with status
-- [ ] Active/idle indicators per agent
+### 2.3 Agent Status Indicators ✅
+- [x] Show all agents with status
+- [x] Active/idle/offline indicators per agent (colored dots)
+- [x] Active session count badges
 
-### 2.4 Cost Tracking ⏳
-- [ ] Parse usage from transcripts
-- [ ] Show cost per session
-- [ ] Daily cost summary
+### 2.4 Cost Tracking ✅
+- [x] Parse usage from transcripts (tokens from message events)
+- [x] Estimate costs based on model rates (Opus, Sonnet, Kimi, GPT-4)
+- [x] Show cost per session (today + all-time)
+- [x] Daily cost summary in stats grid
+- [x] Cost breakdown panel by agent
 
 ---
 
@@ -67,6 +70,26 @@ Tracking incremental improvements to the observability dashboard.
 ---
 
 ## Changelog
+
+### 2026-02-08 — Phase 2 Complete ✅
+
+**Agent Status Indicators**
+- Backend: `getAgentStatus()` function with 5-min/30-min thresholds
+- Frontend: Colored status dots (green=active, yellow=idle, gray=offline)
+- Active session count badges per agent
+
+**Cost Tracking**
+- Backend: `parseUsageFromEvents()` extracts tokens from message usage
+- Backend: `getSessionCosts()` calculates per-session and per-agent costs
+- Model-based cost rates: Opus, Sonnet, Kimi, GPT-4/GPT-4o
+- Frontend: Stats cards for tokens + estimated cost
+- Frontend: Cost breakdown panel with today/all-time totals
+
+**Files changed:**
+- `server.js` — Added `getAgentStatus()`, `getSessionCosts()`, `parseUsageFromEvents()`
+- `public/index.html` — New stat cards (tokens, cost) + costs panel
+- `public/app.js` — Agent status rendering, cost fetching/rendering
+- `public/style.css` — Status indicators, cost panel styles
 
 ### 2026-02-07 — Phase 1 & Phase 2 Partial 🎉
 

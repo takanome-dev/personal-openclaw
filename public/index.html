@@ -38,14 +38,14 @@
           <div class="stat-label">Commands</div>
         </div>
         <div class="stat-card">
-          <div class="stat-icon browser">🌐</div>
-          <div class="stat-value" id="stat-browser">0</div>
-          <div class="stat-label">Browser Sessions</div>
+          <div class="stat-icon tokens">🔤</div>
+          <div class="stat-value" id="stat-tokens">0</div>
+          <div class="stat-label">Tokens Today</div>
         </div>
-        <div class="stat-card">
-          <div class="stat-icon message">💬</div>
-          <div class="stat-value" id="stat-messages">0</div>
-          <div class="stat-label">Messages</div>
+        <div class="stat-card cost">
+          <div class="stat-icon cost">💰</div>
+          <div class="stat-value" id="stat-cost">$0.00</div>
+          <div class="stat-label">Est. Cost Today</div>
         </div>
       </div>
 
@@ -87,6 +87,11 @@
       <section class="files-panel" id="files-panel" style="display: none;">
         <h2>Top Files Accessed Today</h2>
         <div id="files-list" class="files-list"></div>
+      </section>
+
+      <section class="costs-panel" id="costs-panel" style="display: none;">
+        <h2>Cost Breakdown by Agent</h2>
+        <div id="costs-list" class="costs-list"></div>
       </section>
     </main>
   </div>

@@ -116,6 +116,12 @@ async function fetchStats() {
   return data.stats;
 }
 
+async function fetchCosts() {
+  const res = await fetch('/api/costs');
+  const data = await res.json();
+  return data.costs;
+}
+
 async function fetchGoals() {
   const url = selectedSession
     ? `/api/goals?session=${selectedSession}`
@@ -189,6 +195,12 @@ function renderEvents(events) {
   });
 }
 
+const agentStatusColors = {
+  active: '#22c55e',
+  idle: '#f59e0b',
+  offline: '#94a3b8',
+};
+
 function renderAgents(agents) {
   const container = document.getElementById('agents-list');
   
@@ -211,8 +223,14 @@ function renderAgents(agents) {
       <button class="agent-item ${agent.id === selectedAgent ? 'active' : ''}" data-id="${agent.id}">
         <div class="agent-emoji">${agent.emoji}</div>
         <div class="agent-info">
-          <div class="agent-name">${escapeHtml(agent.id)}</div>
-          <div class="agent-sessions">${agent.sessionCount} sessions</div>
+          <div class="agent-name">
+            ${escapeHtml(agent.id)}
+            <span class="agent-status-dot" style="background: ${agentStatusColors[agent.status] || agentStatusColors.offline}" title="${agent.status}"></span>
+          </div>
+          <div class="agent-sessions">
+            ${agent.sessionCount} sessions
+            ${agent.activeSessions > 0 ? `<span class="agent-active-badge">${agent.activeSessions} active</span>` : ''}
+          </div>
         </div>
       </button>
     `).join('')}
@@ -317,8 +335,8 @@ function renderStats(stats) {
   const toolCount = Object.values(stats.toolBreakdown).reduce((a, b) => a + b, 0);
   document.getElementById('stat-tools').textContent = toolCount;
   document.getElementById('stat-exec').textContent = stats.execCommands;
-  document.getElementById('stat-browser').textContent = stats.browserSessions;
-  document.getElementById('stat-messages').textContent = stats.messagesExchanged;
+  document.getElementById('stat-tokens').textContent = formatNumber(stats.totalTokens || 0);
+  document.getElementById('stat-cost').textContent = `$${(stats.estimatedCost || 0).toFixed(2)}`;
   
   // Render top files
   if (stats.topFiles.length > 0) {
@@ -337,6 +355,54 @@ function renderStats(stats) {
   }
 }
 
+function renderCosts(costs) {
+  if (!costs || !costs.agents || costs.agents.length === 0) {
+    document.getElementById('costs-panel').style.display = 'none';
+    return;
+  }
+  
+  const costsPanel = document.getElementById('costs-panel');
+  const costsList = document.getElementById('costs-list');
+  
+  costsPanel.style.display = 'block';
+  
+  const agentEmojis = { main: '🧠', venice: '🎭', kimi: '💻' };
+  
+  costsList.innerHTML = `
+    <div class="cost-summary">
+      <div class="cost-total">
+        <span class="cost-label">Today</span>
+        <span class="cost-value">$${costs.totalToday.toFixed(2)}</span>
+      </div>
+      <div class="cost-total all-time">
+        <span class="cost-label">All Time</span>
+        <span class="cost-value">$${costs.totalAllTime.toFixed(2)}</span>
+      </div>
+    </div>
+    <div class="cost-breakdown">
+      ${costs.agents.map(agent => `
+        <div class="cost-agent">
+          <div class="cost-agent-header">
+            <span class="cost-agent-emoji">${agentEmojis[agent.agentId] || '🤖'}</span>
+            <span class="cost-agent-name">${escapeHtml(agent.agentId)}</span>
+            <span class="cost-agent-total">$${agent.todayCost.toFixed(2)}</span>
+          </div>
+          <div class="cost-agent-details">
+            <span>${formatNumber(agent.todayTokens)} tokens today</span>
+            <span class="cost-agent-alltime">${formatNumber(agent.allTimeTokens)} all time</span>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function formatNumber(num) {
+  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
+  if (num >= 1_000) return `${(num / 1_000).toFixed(1)}k`;
+  return num.toString();
+}
+
 function escapeHtml(text) {
   if (!text) return '';
   const div = document.createElement('div');
@@ -346,12 +412,13 @@ function escapeHtml(text) {
 
 async function refresh() {
   try {
-    const [agents, events, sessions, stats, goals] = await Promise.all([
+    const [agents, events, sessions, stats, goals, costs] = await Promise.all([
       fetchAgents(),
       fetchEvents(),
       fetchSessions(),
       fetchStats(),
       fetchGoals(),
+      fetchCosts(),
     ]);
     
     renderAgents(agents);
@@ -359,6 +426,7 @@ async function refresh() {
     renderSessions(sessions);
     renderStats(stats);
     renderGoals(goals);
+    renderCosts(costs);
   } catch (err) {
     console.error('Refresh failed:', err);
   }

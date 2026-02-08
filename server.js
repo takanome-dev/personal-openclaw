@@ -331,6 +331,129 @@ async function getEvents(sessionId, agentId, limit = 100) {
     .slice(0, limit);
 }
 
+// Parse usage/cost from transcript events
+function parseUsageFromEvents(events) {
+  let totalTokens = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let estimatedCost = 0;
+  
+  // Cost per 1M tokens (approximate rates for common models)
+  const costRates = {
+    'claude-opus-4-5': { input: 15, output: 75 },
+    'claude-sonnet-4-5': { input: 3, output: 15 },
+    'kimi-k2': { input: 0.5, output: 2 },
+    'gpt-4': { input: 30, output: 60 },
+    'gpt-4o': { input: 5, output: 15 },
+    'default': { input: 3, output: 10 },
+  };
+  
+  let currentModel = 'default';
+  
+  for (const event of events) {
+    // Track model changes
+    if (event.type === 'model_change') {
+      const modelId = event.modelId?.toLowerCase() || '';
+      if (modelId.includes('opus')) currentModel = 'claude-opus-4-5';
+      else if (modelId.includes('sonnet')) currentModel = 'claude-sonnet-4-5';
+      else if (modelId.includes('kimi')) currentModel = 'kimi-k2';
+      else if (modelId.includes('gpt-4o')) currentModel = 'gpt-4o';
+      else if (modelId.includes('gpt-4')) currentModel = 'gpt-4';
+    }
+    
+    // Extract usage from message events
+    if (event.type === 'message') {
+      const usage = event.message?.usage;
+      if (usage) {
+        const inp = usage.inputTokens || usage.input_tokens || usage.prompt_tokens || 0;
+        const out = usage.outputTokens || usage.output_tokens || usage.completion_tokens || 0;
+        inputTokens += inp;
+        outputTokens += out;
+        totalTokens += inp + out;
+        
+        // Calculate cost
+        const rates = costRates[currentModel] || costRates.default;
+        estimatedCost += (inp * rates.input + out * rates.output) / 1_000_000;
+      }
+    }
+    
+    // Some events have direct usage field
+    if (event.usage) {
+      const inp = event.usage.inputTokens || event.usage.input_tokens || 0;
+      const out = event.usage.outputTokens || event.usage.output_tokens || 0;
+      inputTokens += inp;
+      outputTokens += out;
+      totalTokens += inp + out;
+    }
+  }
+  
+  return {
+    totalTokens,
+    inputTokens,
+    outputTokens,
+    estimatedCost: Math.round(estimatedCost * 1000) / 1000, // Round to 3 decimals
+  };
+}
+
+// Get agent status (active if has recent activity)
+async function getAgentStatus() {
+  const agents = await discoverAgents();
+  const now = Date.now();
+  const thirtyMinutes = 30 * 60 * 1000;
+  const fiveMinutes = 5 * 60 * 1000;
+  
+  const agentStatus = [];
+  
+  for (const agentId of agents) {
+    const sessionsDir = getAgentSessionsDir(agentId);
+    let sessionCount = 0;
+    let activeSessions = 0;
+    let lastActivity = null;
+    let latestTimestamp = 0;
+    
+    try {
+      const files = await fs.readdir(sessionsDir);
+      const sessionFiles = files.filter(f => f.endsWith('.jsonl') && !f.includes('.deleted.'));
+      sessionCount = sessionFiles.length;
+      
+      for (const file of sessionFiles) {
+        const sessionId = file.replace('.jsonl', '');
+        const events = await readSessionFile(sessionId, agentId);
+        
+        if (events.length > 0) {
+          const lastEvent = events[events.length - 1];
+          const timestamp = new Date(lastEvent.timestamp || 0).getTime();
+          
+          if (timestamp > latestTimestamp) {
+            latestTimestamp = timestamp;
+            lastActivity = lastEvent.timestamp;
+          }
+          
+          if (now - timestamp < thirtyMinutes) {
+            activeSessions++;
+          }
+        }
+      }
+    } catch {
+      // Agent might not have sessions dir yet
+    }
+    
+    const isActive = latestTimestamp > 0 && (now - latestTimestamp) < fiveMinutes;
+    const isIdle = latestTimestamp > 0 && (now - latestTimestamp) < thirtyMinutes && !isActive;
+    
+    agentStatus.push({
+      id: agentId,
+      sessionCount,
+      activeSessions,
+      lastActivity,
+      status: isActive ? 'active' : isIdle ? 'idle' : 'offline',
+      emoji: agentId === 'main' ? '🧠' : agentId === 'venice' ? '🎭' : agentId === 'kimi' ? '💻' : '🤖',
+    });
+  }
+  
+  return agentStatus;
+}
+
 // Get stats
 async function getStats() {
   const sessions = await readSessions();
@@ -341,10 +464,17 @@ async function getStats() {
   let execCommands = 0;
   let messagesExchanged = 0;
   let topFiles = new Map();
+  let totalTokens = 0;
+  let totalCost = 0;
   
   for (const s of sessions) {
     const todayEvents = s.events.filter(e => (e.timestamp || '').startsWith(today));
     totalEvents += todayEvents.length;
+    
+    // Parse usage for cost calculation
+    const usage = parseUsageFromEvents(todayEvents);
+    totalTokens += usage.totalTokens;
+    totalCost += usage.estimatedCost;
     
     for (const event of todayEvents) {
       if (event.type === 'tool' || event.type === 'toolCall') {
@@ -375,6 +505,53 @@ async function getStats() {
     browserSessions: 0, // Not tracked in native logs
     messagesExchanged,
     sessionCount: sessions.length,
+    totalTokens,
+    estimatedCost: Math.round(totalCost * 100) / 100, // Round to 2 decimals
+  };
+}
+
+// Get cost data per session
+async function getSessionCosts() {
+  const sessions = await readSessions();
+  const today = new Date().toISOString().split('T')[0];
+  
+  const sessionCosts = sessions.map(s => {
+    const todayEvents = s.events.filter(e => (e.timestamp || '').startsWith(today));
+    const usage = parseUsageFromEvents(todayEvents);
+    const allTimeUsage = parseUsageFromEvents(s.events);
+    
+    return {
+      sessionId: s.id,
+      agentId: s.agentId || 'main',
+      label: s.metadata?.cwd?.split('/').pop() || s.id.slice(0, 8),
+      today: usage,
+      allTime: allTimeUsage,
+    };
+  }).filter(s => s.allTime.totalTokens > 0);
+  
+  // Aggregate by agent
+  const agentCosts = {};
+  for (const s of sessionCosts) {
+    if (!agentCosts[s.agentId]) {
+      agentCosts[s.agentId] = {
+        agentId: s.agentId,
+        todayTokens: 0,
+        todayCost: 0,
+        allTimeTokens: 0,
+        allTimeCost: 0,
+      };
+    }
+    agentCosts[s.agentId].todayTokens += s.today.totalTokens;
+    agentCosts[s.agentId].todayCost += s.today.estimatedCost;
+    agentCosts[s.agentId].allTimeTokens += s.allTime.totalTokens;
+    agentCosts[s.agentId].allTimeCost += s.allTime.estimatedCost;
+  }
+  
+  return {
+    sessions: sessionCosts,
+    agents: Object.values(agentCosts),
+    totalToday: sessionCosts.reduce((sum, s) => sum + s.today.estimatedCost, 0),
+    totalAllTime: sessionCosts.reduce((sum, s) => sum + s.allTime.estimatedCost, 0),
   };
 }
 
@@ -408,24 +585,18 @@ const server = http.createServer(async (req, res) => {
 
   // API routes
   if (url.pathname === '/api/agents') {
-    const agents = await discoverAgents();
-    const agentInfo = [];
-    for (const agentId of agents) {
-      const sessionsDir = getAgentSessionsDir(agentId);
-      let sessionCount = 0;
-      try {
-        const files = await fs.readdir(sessionsDir);
-        sessionCount = files.filter(f => f.endsWith('.jsonl') && !f.includes('.deleted.')).length;
-      } catch {}
-      agentInfo.push({
-        id: agentId,
-        sessionCount,
-        emoji: agentId === 'main' ? '🧠' : agentId === 'venice' ? '🎭' : agentId === 'kimi' ? '💻' : '🤖',
-      });
-    }
+    const agentStatus = await getAgentStatus();
     res.setHeader('Content-Type', 'application/json');
     res.writeHead(200);
-    res.end(JSON.stringify({ agents: agentInfo }));
+    res.end(JSON.stringify({ agents: agentStatus }));
+    return;
+  }
+
+  if (url.pathname === '/api/costs') {
+    const costs = await getSessionCosts();
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(200);
+    res.end(JSON.stringify({ costs }));
     return;
   }
 
