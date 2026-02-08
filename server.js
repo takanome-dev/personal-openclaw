@@ -2,11 +2,19 @@ const http = require('http');
 const fs = require('fs').promises;
 const path = require('path');
 const os = require('os');
+const { watch } = require('fs');
 
 const PORT = process.env.PORT || 3000;
 const OPENCLAW_HOME = path.join(os.homedir(), '.openclaw');
 const AGENTS_DIR = path.join(OPENCLAW_HOME, 'agents');
 const OPENCLAW_LOGS = path.join(OPENCLAW_HOME, 'logs', 'current.jsonl');
+
+// SSE clients for real-time updates
+const sseClients = new Set();
+
+// File watchers for real-time detection
+const fileWatchers = new Map();
+const sessionFilePositions = new Map();
 
 // Discover all agents dynamically
 async function discoverAgents() {
@@ -570,6 +578,159 @@ async function getGoals(sessionId) {
   return goalEvents;
 }
 
+// Get session timeline (for timeline view)
+async function getSessionTimeline(sessionId, agentId = 'main') {
+  const events = await readSessionFile(sessionId, agentId);
+  const openclawLogs = await readOpenClawLogs();
+  
+  // Find spawn events related to this session
+  const spawnEvents = openclawLogs.filter(e => 
+    e.type === 'session_spawn' && 
+    (e.spawnedSessionId === sessionId || e.sessionId === sessionId)
+  );
+  
+  // Build timeline items
+  const timeline = [];
+  
+  for (const event of events) {
+    const item = {
+      id: event.id || `${Date.now()}-${Math.random()}`,
+      timestamp: event.timestamp,
+      type: event.type,
+      data: event,
+    };
+    
+    // Detect spawn relationships from events
+    if (event.type === 'custom' && event.action?.includes('spawn')) {
+      item.isSpawnEvent = true;
+      item.spawnTarget = event.spawnedSessionId || event.targetSessionId;
+    }
+    
+    timeline.push(item);
+  }
+  
+  // Add spawn events from openclaw logs
+  for (const spawn of spawnEvents) {
+    timeline.push({
+      id: spawn.id,
+      timestamp: spawn.timestamp,
+      type: 'spawn',
+      isSpawnEvent: true,
+      spawnTarget: spawn.spawnedSessionId,
+      spawnSource: spawn.sessionId,
+      data: spawn,
+    });
+  }
+  
+  return timeline.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+}
+
+// Broadcast message to all SSE clients
+function broadcast(data) {
+  const message = `data: ${JSON.stringify(data)}\n\n`;
+  sseClients.forEach(client => {
+    try {
+      client.write(message);
+    } catch (err) {
+      // Client disconnected
+      sseClients.delete(client);
+    }
+  });
+}
+
+// Setup file watchers for real-time updates
+async function setupFileWatchers() {
+  const agents = await discoverAgents();
+  
+  for (const agentId of agents) {
+    const sessionsDir = getAgentSessionsDir(agentId);
+    
+    try {
+      // Watch for new session files
+      const watcher = watch(sessionsDir, async (eventType, filename) => {
+        if (!filename || !filename.endsWith('.jsonl')) return;
+        if (filename.includes('.deleted.')) return;
+        
+        const sessionId = filename.replace('.jsonl', '');
+        const filePath = path.join(sessionsDir, filename);
+        
+        try {
+          // Get current file position
+          const stats = await fs.stat(filePath);
+          const key = `${agentId}/${sessionId}`;
+          const lastPos = sessionFilePositions.get(key) || 0;
+          
+          if (stats.size > lastPos) {
+            // Read new content
+            const fd = await fs.open(filePath, 'r');
+            const buffer = Buffer.alloc(stats.size - lastPos);
+            await fd.read(buffer, 0, stats.size - lastPos, lastPos);
+            await fd.close();
+            
+            const newContent = buffer.toString('utf-8');
+            const newLines = newContent.trim().split('\n').filter(Boolean);
+            
+            // Parse and broadcast new events
+            for (const line of newLines) {
+              try {
+                const event = JSON.parse(line);
+                const transformed = transformEvent(event, sessionId, agentId);
+                if (transformed) {
+                  broadcast({
+                    type: 'new_event',
+                    event: transformed,
+                    sessionId,
+                    agentId,
+                    timestamp: new Date().toISOString(),
+                  });
+                }
+              } catch (e) {
+                // Ignore parse errors
+              }
+            }
+            
+            sessionFilePositions.set(key, stats.size);
+          }
+        } catch (err) {
+          // File might not exist yet
+        }
+      });
+      
+      fileWatchers.set(agentId, watcher);
+      
+      // Initialize positions for existing files
+      const files = await fs.readdir(sessionsDir).catch(() => []);
+      for (const file of files) {
+        if (file.endsWith('.jsonl') && !file.includes('.deleted.')) {
+          const sessionId = file.replace('.jsonl', '');
+          const filePath = path.join(sessionsDir, file);
+          try {
+            const stats = await fs.stat(filePath);
+            sessionFilePositions.set(`${agentId}/${sessionId}`, stats.size);
+          } catch {}
+        }
+      }
+    } catch (err) {
+      console.error(`Failed to watch ${sessionsDir}:`, err.message);
+    }
+  }
+  
+  // Watch OpenClaw logs
+  try {
+    const openclawWatcher = watch(path.dirname(OPENCLAW_LOGS), (eventType, filename) => {
+      if (filename === 'current.jsonl') {
+        broadcast({
+          type: 'openclaw_update',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    });
+    fileWatchers.set('openclaw', openclawWatcher);
+  } catch (err) {
+    console.error('Failed to watch OpenClaw logs:', err.message);
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   
@@ -636,6 +797,43 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/timeline') {
+    const sessionId = url.searchParams.get('session');
+    const agentId = url.searchParams.get('agent') || 'main';
+    if (!sessionId) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: 'session parameter required' }));
+      return;
+    }
+    const timeline = await getSessionTimeline(sessionId, agentId);
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(200);
+    res.end(JSON.stringify({ timeline }));
+    return;
+  }
+
+  // SSE endpoint for real-time updates
+  if (url.pathname === '/api/events/stream') {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.writeHead(200);
+    
+    // Send initial connection message
+    res.write('data: {"type":"connected","timestamp":"' + new Date().toISOString() + '"}\n\n');
+    
+    // Add client to broadcast list
+    sseClients.add(res);
+    
+    // Remove client on close
+    req.on('close', () => {
+      sseClients.delete(res);
+    });
+    
+    return;
+  }
+
   // Static files
   let filePath = url.pathname === '/' ? '/index.html' : url.pathname;
   filePath = path.join(__dirname, 'public', filePath);
@@ -666,4 +864,8 @@ server.listen(PORT, async () => {
   console.log(`🍊 OpenClaw dashboard running at http://localhost:${PORT}`);
   console.log(`   Agents discovered: ${agents.join(', ')}`);
   console.log(`   Reading from: ${AGENTS_DIR}`);
+  
+  // Setup file watchers for real-time updates
+  await setupFileWatchers();
+  console.log(`   Real-time updates: enabled (SSE on /api/events/stream)`);
 });

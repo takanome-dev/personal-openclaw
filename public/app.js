@@ -72,6 +72,8 @@ const channelColors = {
 let selectedSession = null;
 let selectedAgent = null; // null = all agents
 let pollInterval;
+let eventSource = null;
+let useRealTime = true; // Toggle between SSE and polling
 
 function formatTimeAgo(timestamp) {
   const seconds = Math.floor((Date.now() - new Date(timestamp)) / 1000);
@@ -122,6 +124,173 @@ async function fetchCosts() {
   return data.costs;
 }
 
+async function fetchTimeline(sessionId, agentId) {
+  const url = `/api/timeline?session=${sessionId}${agentId ? `&agent=${agentId}` : ''}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  return data.timeline;
+}
+
+// SSE Real-time connection
+function connectEventStream() {
+  if (eventSource) {
+    eventSource.close();
+  }
+  
+  eventSource = new EventSource('/api/events/stream');
+  
+  eventSource.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      
+      if (data.type === 'new_event') {
+        // Only add if it matches current filter
+        if (selectedSession && data.sessionId !== selectedSession) return;
+        if (selectedAgent && data.agentId !== selectedAgent) return;
+        
+        // Prepend new event to the list
+        prependEvent(data.event);
+        
+        // Update stats periodically
+        debouncedStatsRefresh();
+      } else if (data.type === 'openclaw_update') {
+        // Refresh goals and costs
+        refreshGoalsAndCosts();
+      }
+    } catch (err) {
+      console.error('SSE parse error:', err);
+    }
+  };
+  
+  eventSource.onerror = (err) => {
+    console.error('SSE error:', err);
+    // Fall back to polling after 3 errors
+    if (useRealTime) {
+      console.log('Falling back to polling...');
+      useRealTime = false;
+      eventSource.close();
+      startPolling();
+    }
+  };
+  
+  eventSource.onopen = () => {
+    console.log('SSE connected');
+    useRealTime = true;
+    stopPolling();
+  };
+}
+
+// Debounced stats refresh
+let statsRefreshTimeout;
+function debouncedStatsRefresh() {
+  clearTimeout(statsRefreshTimeout);
+  statsRefreshTimeout = setTimeout(() => {
+    refreshStatsOnly();
+  }, 1000);
+}
+
+async function refreshStatsOnly() {
+  try {
+    const [stats, costs] = await Promise.all([fetchStats(), fetchCosts()]);
+    renderStats(stats);
+    renderCosts(costs);
+  } catch (err) {
+    console.error('Stats refresh failed:', err);
+  }
+}
+
+async function refreshGoalsAndCosts() {
+  try {
+    const [goals, costs] = await Promise.all([fetchGoals(), fetchCosts()]);
+    renderGoals(goals);
+    renderCosts(costs);
+  } catch (err) {
+    console.error('Goals/costs refresh failed:', err);
+  }
+}
+
+function prependEvent(event) {
+  const container = document.getElementById('events-list');
+  const empty = container.querySelector('.empty');
+  if (empty) empty.remove();
+  
+  const eventHtml = renderSingleEvent(event);
+  container.insertAdjacentHTML('afterbegin', eventHtml);
+  
+  // Re-attach expand handlers
+  const newEvent = container.firstElementChild;
+  const expandBtn = newEvent.querySelector('.event-expand-btn');
+  if (expandBtn) {
+    expandBtn.addEventListener('click', () => {
+      const targetId = expandBtn.dataset.target;
+      const details = document.getElementById(targetId);
+      const icon = expandBtn.querySelector('.expand-icon');
+      
+      if (details.classList.contains('hidden')) {
+        details.classList.remove('hidden');
+        expandBtn.innerHTML = '<span class="expand-icon">▼</span> Hide details';
+      } else {
+        details.classList.add('hidden');
+        expandBtn.innerHTML = '<span class="expand-icon">▶</span> Show details';
+      }
+    });
+  }
+  
+  // Limit to 50 events
+  while (container.children.length > 50) {
+    container.removeChild(container.lastElementChild);
+  }
+}
+
+function renderSingleEvent(event) {
+  const eventColor = eventColors[event.type] || 'var(--accent)';
+  const channelIcon = channelIcons[event.channel] || '🔵';
+  const channelColor = channelColors[event.channel] || '#94a3b8';
+  const isToolCall = event.type === 'tool_call' && event.args;
+  const eventId = `event-${event.id}`;
+  
+  return `
+    <div class="event-item" style="border-left: 2px solid ${eventColor}">
+      <div class="event-icon">${icons[event.type] || '•'}</div>
+      <div class="event-content">
+        <div class="event-header">
+          <span class="event-action">${escapeHtml(event.action)}</span>
+          ${event.tool ? `<span class="event-tool" style="background: ${toolColors[event.tool] || eventColor}">${event.tool}</span>` : ''}
+          ${event.channel ? `<span class="event-channel" style="background: ${channelColor}20; color: ${channelColor}">${channelIcon} ${event.channel}</span>` : ''}
+        </div>
+        ${isToolCall ? `
+          <button class="event-expand-btn" data-target="${eventId}">
+            <span class="expand-icon">▶</span> Show details
+          </button>
+          <div class="event-details hidden" id="${eventId}">
+            <pre class="event-args">${escapeHtml(JSON.stringify(event.args, null, 2))}</pre>
+          </div>
+        ` : ''}
+        ${event.reason ? `<div class="event-reason"><span>Reason:</span> ${escapeHtml(event.reason)}</div>` : ''}
+        ${event.resultSummary ? `<div class="event-result"><span>Result:</span> ${escapeHtml(event.resultSummary)}</div>` : ''}
+        ${event.filePath ? `<div class="event-file">${escapeHtml(event.filePath)}</div>` : ''}
+        <div class="event-meta">
+          <span>🕐 ${formatTimeAgo(event.timestamp)}</span>
+          ${event.agentId ? `<span class="event-agent">${{'main':'🧠','venice':'🎭','kimi':'💻'}[event.agentId] || '🤖'} ${event.agentId}</span>` : ''}
+          ${event.sessionLabel ? `<span>📱 ${escapeHtml(event.sessionLabel)}</span>` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function startPolling() {
+  if (pollInterval) return;
+  pollInterval = setInterval(refresh, 5000);
+}
+
+function stopPolling() {
+  if (pollInterval) {
+    clearInterval(pollInterval);
+    pollInterval = null;
+  }
+}
+
 async function fetchGoals() {
   const url = selectedSession
     ? `/api/goals?session=${selectedSession}`
@@ -139,53 +308,16 @@ function renderEvents(events) {
     return;
   }
   
-  container.innerHTML = events.map(event => {
-    const eventColor = eventColors[event.type] || 'var(--accent)';
-    const channelIcon = channelIcons[event.channel] || '🔵';
-    const channelColor = channelColors[event.channel] || '#94a3b8';
-    const isToolCall = event.type === 'tool_call' && event.args;
-    const eventId = `event-${event.id}`;
-    
-    return `
-      <div class="event-item" style="border-left: 2px solid ${eventColor}">
-        <div class="event-icon">${icons[event.type] || '•'}</div>
-        <div class="event-content">
-          <div class="event-header">
-            <span class="event-action">${escapeHtml(event.action)}</span>
-            ${event.tool ? `<span class="event-tool" style="background: ${toolColors[event.tool] || eventColor}">${event.tool}</span>` : ''}
-            ${event.channel ? `<span class="event-channel" style="background: ${channelColor}20; color: ${channelColor}">${channelIcon} ${event.channel}</span>` : ''}
-          </div>
-          ${isToolCall ? `
-            <button class="event-expand-btn" data-target="${eventId}">
-              <span class="expand-icon">▶</span> Show details
-            </button>
-            <div class="event-details hidden" id="${eventId}">
-              <pre class="event-args">${escapeHtml(JSON.stringify(event.args, null, 2))}</pre>
-            </div>
-          ` : ''}
-          ${event.reason ? `<div class="event-reason"><span>Reason:</span> ${escapeHtml(event.reason)}</div>` : ''}
-          ${event.resultSummary ? `<div class="event-result"><span>Result:</span> ${escapeHtml(event.resultSummary)}</div>` : ''}
-          ${event.filePath ? `<div class="event-file">${escapeHtml(event.filePath)}</div>` : ''}
-          <div class="event-meta">
-            <span>🕐 ${formatTimeAgo(event.timestamp)}</span>
-            ${event.agentId ? `<span class="event-agent">${{'main':'🧠','venice':'🎭','kimi':'💻'}[event.agentId] || '🤖'} ${event.agentId}</span>` : ''}
-            ${event.sessionLabel ? `<span>📱 ${escapeHtml(event.sessionLabel)}</span>` : ''}
-          </div>
-        </div>
-      </div>
-    `;
-  }).join('');
+  container.innerHTML = events.map(event => renderSingleEvent(event)).join('');
   
   // Add expand/collapse handlers
   container.querySelectorAll('.event-expand-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const targetId = btn.dataset.target;
       const details = document.getElementById(targetId);
-      const icon = btn.querySelector('.expand-icon');
       
       if (details.classList.contains('hidden')) {
         details.classList.remove('hidden');
-        icon.textContent = '▼';
         btn.innerHTML = '<span class="expand-icon">▼</span> Hide details';
       } else {
         details.classList.add('hidden');
@@ -259,13 +391,13 @@ function renderSessions(sessions) {
   }
   
   const agentEmojis = { main: '🧠', venice: '🎭', kimi: '💻' };
-  
+
   container.innerHTML = sessions.map(session => {
     const channelIcon = channelIcons[session.channel] || '🔵';
     const channelColor = channelColors[session.channel] || '#94a3b8';
-    
+
     return `
-      <button class="session-item ${session.id === selectedSession ? 'active' : ''}" data-id="${session.id}">
+      <div class="session-item ${session.id === selectedSession ? 'active' : ''}" data-id="${session.id}" data-agent="${session.agentId}">
         <div class="session-header">
           <span class="session-name">
             ${!selectedAgent ? `<span class="session-agent">${agentEmojis[session.agentId] || '🤖'}</span>` : ''}
@@ -287,17 +419,31 @@ function renderSessions(sessions) {
             <span>(${session.goalSummary.completionRate}%)</span>
           </div>
         ` : ''}
-      </button>
+        <button class="view-timeline-btn" data-id="${session.id}" data-agent="${session.agentId}">View Timeline</button>
+      </div>
     `;
   }).join('');
-  
-  // Add click handlers
+
+  // Add click handlers for session selection
   container.querySelectorAll('.session-item').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
+      // Don't trigger if clicking the timeline button
+      if (e.target.classList.contains('view-timeline-btn')) return;
+
       selectedSession = btn.dataset.id;
       document.getElementById('events-title').textContent = 'Session Events';
       document.getElementById('clear-filter').classList.remove('hidden');
       refresh();
+    });
+  });
+
+  // Add click handlers for timeline buttons
+  container.querySelectorAll('.view-timeline-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const sessionId = btn.dataset.id;
+      const agentId = btn.dataset.agent;
+      showTimeline(sessionId, agentId);
     });
   });
 }
@@ -360,14 +506,14 @@ function renderCosts(costs) {
     document.getElementById('costs-panel').style.display = 'none';
     return;
   }
-  
+
   const costsPanel = document.getElementById('costs-panel');
   const costsList = document.getElementById('costs-list');
-  
+
   costsPanel.style.display = 'block';
-  
+
   const agentEmojis = { main: '🧠', venice: '🎭', kimi: '💻' };
-  
+
   costsList.innerHTML = `
     <div class="cost-summary">
       <div class="cost-total">
@@ -395,6 +541,103 @@ function renderCosts(costs) {
       `).join('')}
     </div>
   `;
+}
+
+// Timeline rendering
+async function showTimeline(sessionId, agentId) {
+  const timelinePanel = document.getElementById('timeline-panel');
+  const timelineContent = document.getElementById('timeline-content');
+
+  timelinePanel.style.display = 'block';
+  timelineContent.innerHTML = '<div class="empty">Loading timeline...</div>';
+
+  try {
+    const timeline = await fetchTimeline(sessionId, agentId);
+    renderTimeline(timeline, sessionId);
+  } catch (err) {
+    timelineContent.innerHTML = '<div class="empty">Failed to load timeline</div>';
+    console.error('Timeline error:', err);
+  }
+}
+
+function renderTimeline(timeline, sessionId) {
+  const container = document.getElementById('timeline-content');
+
+  if (timeline.length === 0) {
+    container.innerHTML = '<div class="empty">No timeline data available</div>';
+    return;
+  }
+
+  const typeIcons = {
+    session: '▶',
+    message: '💬',
+    tool: '⚡',
+    toolCall: '⚡',
+    exec: '⌘',
+    spawn: '🔀',
+  };
+
+  const typeLabels = {
+    session: 'Session Start',
+    message: 'Message',
+    tool: 'Tool Call',
+    toolCall: 'Tool Call',
+    exec: 'Command',
+    spawn: 'Spawned Session',
+  };
+
+  container.innerHTML = `
+    <div class="timeline">
+      ${timeline.map(item => {
+        const type = item.type === 'toolCall' ? 'tool-call' : item.type;
+        const isSpawn = item.isSpawnEvent || item.type === 'spawn';
+        const dotClass = isSpawn ? 'spawn' : type === 'session' ? 'session-start' : type === 'tool' || type === 'toolCall' ? 'tool-call' : 'message';
+
+        let title = '';
+        let details = '';
+
+        if (item.type === 'session') {
+          title = `Session started in ${item.data?.cwd?.split('/').pop() || 'unknown'}`;
+        } else if (item.type === 'message') {
+          const content = item.data?.message?.content;
+          if (Array.isArray(content)) {
+            title = content.map(c => c.text || `[${c.type}]`).join(' ').substring(0, 100);
+          } else {
+            title = String(content || '').substring(0, 100);
+          }
+          details = `Role: ${item.data?.message?.role || 'unknown'}`;
+        } else if (item.type === 'tool' || item.type === 'toolCall') {
+          const toolName = item.data?.tool || item.data?.name || 'unknown';
+          const args = item.data?.args || item.data?.arguments || {};
+          title = `${toolName}()`;
+          if (args.path) details = `Path: ${args.path}`;
+          else if (args.command) details = `Command: ${args.command.substring(0, 50)}`;
+          else if (args.query) details = `Query: "${args.query.substring(0, 50)}"`;
+        } else if (item.type === 'exec') {
+          title = item.data?.command?.substring(0, 60) || 'Command executed';
+        } else if (isSpawn) {
+          title = `Spawned session ${item.spawnTarget?.slice(0, 8) || 'unknown'}`;
+          details = `From: ${item.spawnSource?.slice(0, 8) || 'unknown'}`;
+        }
+
+        return `
+          <div class="timeline-item">
+            <div class="timeline-dot ${dotClass}"></div>
+            <div class="timeline-content-item">
+              <div class="timeline-time">${new Date(item.timestamp).toLocaleTimeString()}</div>
+              <div class="timeline-type">${typeIcons[item.type] || '•'} ${typeLabels[item.type] || item.type}</div>
+              <div class="timeline-title">${escapeHtml(title)}</div>
+              ${details ? `<div class="timeline-details">${escapeHtml(details)}</div>` : ''}
+              ${isSpawn ? `<div class="timeline-spawn-arrow">→ Spawn chain continues</div>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  // Scroll to bottom (most recent)
+  container.scrollTop = container.scrollHeight;
 }
 
 function formatNumber(num) {
@@ -440,11 +683,19 @@ document.getElementById('clear-filter')?.addEventListener('click', () => {
   refresh();
 });
 
-// Initial load and polling
+// Close timeline button
+document.getElementById('close-timeline')?.addEventListener('click', () => {
+  document.getElementById('timeline-panel').style.display = 'none';
+});
+
+// Initial load and real-time connection
 refresh();
-pollInterval = setInterval(refresh, 5000);
+connectEventStream();
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
-  clearInterval(pollInterval);
+  stopPolling();
+  if (eventSource) {
+    eventSource.close();
+  }
 });
